@@ -1,9 +1,9 @@
 /*
-See LICENSE folder for this sample’s licensing information.
-
-Abstract:
-A class to discover, connect, receive notifications and write data to peripherals by using a transfer service and characteristic.
-*/
+ See LICENSE folder for this sample’s licensing information.
+ 
+ Abstract:
+ A class to discover, connect, receive notifications and write data to peripherals by using a transfer service and characteristic.
+ */
 
 import UIKit
 import CoreBluetooth
@@ -11,11 +11,11 @@ import os
 
 class CentralViewController: UIViewController {
     // UIViewController overrides, properties specific to this class, private helper methods, etc.
-
+    
     @IBOutlet var textView: UITextView!
-
+    
     var centralManager: CBCentralManager!
-
+    
     var discoveredPeripheral: CBPeripheral?
     var transferCharacteristic: CBCharacteristic?
     var writeIterationsComplete = 0
@@ -24,27 +24,27 @@ class CentralViewController: UIViewController {
     let defaultIterations = 5     // change this value based on test usecase
     
     var data = Data()
-
+    var peripheralName: String?
     // MARK: - view lifecycle
     
     override func viewDidLoad() {
         centralManager = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: true])
         super.viewDidLoad()
-
+        
     }
-	
+    
     override func viewWillDisappear(_ animated: Bool) {
         // Don't keep it going while we're not showing.
         centralManager.stopScan()
         os_log("Scanning stopped")
-
+        
         data.removeAll(keepingCapacity: false)
         
         super.viewWillDisappear(animated)
     }
-
+    
     // MARK: - Helper Methods
-
+    
     /*
      * We will first check if we are already connected to our counterpart
      * Otherwise, scan for peripherals - specifically for our service's 128bit CBUUID
@@ -57,12 +57,12 @@ class CentralViewController: UIViewController {
         
         if let connectedPeripheral = connectedPeripherals.last {
             os_log("Connecting to peripheral %@", connectedPeripheral)
-			self.discoveredPeripheral = connectedPeripheral
+            self.discoveredPeripheral = connectedPeripheral
             centralManager.connect(connectedPeripheral, options: nil)
         } else {
             // We were not connected to our counterpart, so start scanning
             centralManager.scanForPeripherals(withServices: [TransferService.serviceUUID],
-                                               options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+                                              options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         }
     }
     
@@ -74,7 +74,7 @@ class CentralViewController: UIViewController {
     private func cleanup() {
         // Don't do anything if we're not connected
         guard let discoveredPeripheral = discoveredPeripheral,
-            case .connected = discoveredPeripheral.state else { return }
+              case .connected = discoveredPeripheral.state else { return }
         
         for service in (discoveredPeripheral.services ?? [] as [CBService]) {
             for characteristic in (service.characteristics ?? [] as [CBCharacteristic]) {
@@ -89,34 +89,60 @@ class CentralViewController: UIViewController {
         centralManager.cancelPeripheralConnection(discoveredPeripheral)
     }
     
+    func presentPeripheralNameAlert(name: String) {
+        let alertController = UIAlertController(
+            title: "Peripheral Connected, Do you want to send message to Central?",
+            message: "Peripheral Name: \(name)",
+            preferredStyle: .alert
+        )
+        
+        let okAction = UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+            // After dismissing the alert, send "text" to the peripheral
+            self?.sendTextToPeripheral()
+        }
+        
+        alertController.addAction(okAction)
+        present(alertController, animated: true, completion: nil)
+    }
+    
+    private func sendTextToPeripheral() {
+        guard let discoveredPeripheral = discoveredPeripheral,
+              let transferCharacteristic = transferCharacteristic
+        else { return }
+        
+        // Send "text" to the peripheral
+        let textData = "Hello from Central!".data(using: .utf8)!
+        discoveredPeripheral.writeValue(textData, for: transferCharacteristic, type: .withoutResponse)
+    }
+    
     /*
      *  Write some test data to peripheral
      */
     private func writeData() {
-    
+        
         guard let discoveredPeripheral = discoveredPeripheral,
-                let transferCharacteristic = transferCharacteristic
-            else { return }
+              let transferCharacteristic = transferCharacteristic
+        else { return }
         
         // check to see if number of iterations completed and peripheral can accept more data
-        while writeIterationsComplete < defaultIterations && discoveredPeripheral.canSendWriteWithoutResponse {
-                    
-            let mtu = discoveredPeripheral.maximumWriteValueLength (for: .withoutResponse)
-            var rawPacket = [UInt8]()
-            
-            let bytesToCopy: size_t = min(mtu, data.count)
-			data.copyBytes(to: &rawPacket, count: bytesToCopy)
-            let packetData = Data(bytes: &rawPacket, count: bytesToCopy)
-			
-			let stringFromData = String(data: packetData, encoding: .utf8)
-			os_log("Writing %d bytes: %s", bytesToCopy, String(describing: stringFromData))
-			
-            discoveredPeripheral.writeValue(packetData, for: transferCharacteristic, type: .withoutResponse)
-            
-            writeIterationsComplete += 1
-            
-        }
-        
+        //        while writeIterationsComplete < defaultIterations && discoveredPeripheral.canSendWriteWithoutResponse {
+        //
+        //            let mtu = discoveredPeripheral.maximumWriteValueLength (for: .withoutResponse)
+        //            var rawPacket = [UInt8]()
+        //
+        //            let bytesToCopy: size_t = min(mtu, data.count)
+        //			data.copyBytes(to: &rawPacket, count: bytesToCopy)
+        //            let packetData = Data(bytes: &rawPacket, count: bytesToCopy)
+        //
+        //			let stringFromData = String(data: packetData, encoding: .utf8)
+        //			os_log("Writing %d bytes: %s", bytesToCopy, String(describing: stringFromData))
+        //
+        //            discoveredPeripheral.writeValue(packetData, for: transferCharacteristic, type: .withoutResponse)
+        //
+        //            writeIterationsComplete += 1
+        //
+        //        }
+        discoveredPeripheral.writeValue(data, for: transferCharacteristic, type: .withoutResponse)
         if writeIterationsComplete == defaultIterations {
             // Cancel our subscription to the characteristic
             discoveredPeripheral.setNotifyValue(false, for: transferCharacteristic)
@@ -127,7 +153,7 @@ class CentralViewController: UIViewController {
 
 extension CentralViewController: CBCentralManagerDelegate {
     // implementations of the CBCentralManagerDelegate methods
-
+    
     /*
      *  centralManagerDidUpdateState is a required protocol method.
      *  Usually, you'd check for other states to make sure the current device supports LE, is powered on, etc.
@@ -135,7 +161,7 @@ extension CentralViewController: CBCentralManagerDelegate {
      *  the Central is ready to be used.
      */
     internal func centralManagerDidUpdateState(_ central: CBCentralManager) {
-
+        
         switch central.state {
         case .poweredOn:
             // ... so start working with the peripheral
@@ -178,7 +204,7 @@ extension CentralViewController: CBCentralManagerDelegate {
             return
         }
     }
-
+    
     /*
      *  This callback comes whenever a peripheral that is advertising the transfer serviceUUID is discovered.
      *  We check the RSSI, to make sure it's close enough that we're interested in it, and if it is,
@@ -190,9 +216,9 @@ extension CentralViewController: CBCentralManagerDelegate {
         // Reject if the signal strength is too low to attempt data transfer.
         // Change the minimum RSSI value depending on your app’s use case.
         guard RSSI.intValue >= -50
-            else {
-                os_log("Discovered perhiperal not in expected range, at %d", RSSI.intValue)
-                return
+        else {
+            os_log("Discovered perhiperal not in expected range, at %d", RSSI.intValue)
+            return
         }
         
         os_log("Discovered %s at %d", String(describing: peripheral.name), RSSI.intValue)
@@ -202,13 +228,18 @@ extension CentralViewController: CBCentralManagerDelegate {
             
             // Save a local copy of the peripheral, so CoreBluetooth doesn't get rid of it.
             discoveredPeripheral = peripheral
-            
             // And finally, connect to the peripheral.
             os_log("Connecting to perhiperal %@", peripheral)
             centralManager.connect(peripheral, options: nil)
         }
     }
-
+    
+    private func provideHapticFeedback() {
+        let feedbackGenerator = UINotificationFeedbackGenerator()
+        feedbackGenerator.prepare()
+        feedbackGenerator.notificationOccurred(.success)
+    }
+    
     /*
      *  If the connection fails for whatever reason, we need to deal with it.
      */
@@ -222,7 +253,8 @@ extension CentralViewController: CBCentralManagerDelegate {
      */
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         os_log("Peripheral Connected")
-        
+        provideHapticFeedback()
+
         // Stop scanning
         centralManager.stopScan()
         os_log("Scanning stopped")
@@ -233,6 +265,13 @@ extension CentralViewController: CBCentralManagerDelegate {
         
         // Clear the data that we may already have
         data.removeAll(keepingCapacity: false)
+        
+        peripheralName = peripheral.name
+        
+        // Present an alert with the peripheral name
+        if let name = peripheralName {
+            presentPeripheralNameAlert(name: name)
+        }
         
         // Make sure we get the discovery callbacks
         peripheral.delegate = self
@@ -255,12 +294,12 @@ extension CentralViewController: CBCentralManagerDelegate {
             os_log("Connection iterations completed")
         }
     }
-
+    
 }
 
 extension CentralViewController: CBPeripheralDelegate {
     // implementations of the CBPeripheralDelegate methods
-
+    
     /*
      *  The peripheral letting us know when services have been invalidated.
      */
@@ -271,7 +310,7 @@ extension CentralViewController: CBPeripheralDelegate {
             peripheral.discoverServices([TransferService.serviceUUID])
         }
     }
-
+    
     /*
      *  The Transfer Service was discovered
      */
@@ -326,27 +365,19 @@ extension CentralViewController: CBPeripheralDelegate {
         }
         
         guard let characteristicData = characteristic.value,
-            let stringFromData = String(data: characteristicData, encoding: .utf8) else { return }
+              let stringFromData = String(data: characteristicData, encoding: .utf8) else { return }
         
         os_log("Received %d bytes: %s", characteristicData.count, stringFromData)
-        
-        // Have we received the end-of-message token?
-        if stringFromData == "EOM" {
-            // End-of-message case: show the data.
-            // Dispatch the text view update to the main queue for updating the UI, because
-            // we don't know which thread this method will be called back on.
-            DispatchQueue.main.async() {
-                self.textView.text = String(data: self.data, encoding: .utf8)
-            }
-            
-            // Write test data
-            writeData()
-        } else {
-            // Otherwise, just append the data to what we have previously received.
-            data.append(characteristicData)
-        }
-    }
 
+        DispatchQueue.main.async() {
+            self.textView.text = String(data: self.data, encoding: .utf8)
+        }
+        
+        // Write test data
+        writeData()
+        os_log("peripheral name: %s, id: %s", peripheral.name ?? "", peripheral.identifier.uuidString)
+    }
+    
     /*
      *  The peripheral letting us know whether our subscribe/unsubscribe happened or not
      */
@@ -376,7 +407,8 @@ extension CentralViewController: CBPeripheralDelegate {
      */
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         os_log("Peripheral is ready, send data")
-        writeData()
+        //writeData()
+        
     }
     
 }

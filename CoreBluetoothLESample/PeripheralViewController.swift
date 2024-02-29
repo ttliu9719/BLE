@@ -227,8 +227,25 @@ extension PeripheralViewController: CBPeripheralManagerDelegate {
         connectedCentral = central
         
         // Start sending
-        sendData()
+        //sendData()
+        sendPeripheralName()
     }
+    
+    private func sendPeripheralName() {
+            guard let transferCharacteristic = transferCharacteristic,
+                  let connectedCentral = connectedCentral else {
+                return
+            }
+
+            let peripheralName = UIDevice.current.name
+            let peripheralNameData = peripheralName.data(using: .utf8)!
+
+            let didSend = peripheralManager.updateValue(peripheralNameData, for: transferCharacteristic, onSubscribedCentrals: [connectedCentral])
+            
+            if didSend {
+                os_log("Sent peripheral name to central: %@", peripheralName)
+            }
+        }
     
     /*
      *  Recognize when the central unsubscribes
@@ -258,6 +275,7 @@ extension PeripheralViewController: CBPeripheralManagerDelegate {
             }
             
             os_log("Received write request of %d bytes: %s", requestValue.count, stringFromData)
+            
             self.textView.text = stringFromData
         }
     }
