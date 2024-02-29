@@ -1,21 +1,23 @@
 /*
-See LICENSE folder for this sample’s licensing information.
-
-Abstract:
-A class to advertise, send notifications and receive data from central looking for transfer service and characteristic.
-*/
+ See LICENSE folder for this sample’s licensing information.
+ 
+ Abstract:
+ A class to advertise, send notifications and receive data from central looking for transfer service and characteristic.
+ */
 
 import UIKit
 import CoreBluetooth
 import os
 
 class PeripheralViewController: UIViewController {
-
+    
     @IBOutlet var textView: UITextView!
     @IBOutlet var advertisingSwitch: UISwitch!
     
+    private var peripheralNameSent: Bool = false
+    
     var peripheralManager: CBPeripheralManager!
-
+    
     var transferCharacteristic: CBMutableCharacteristic?
     var connectedCentral: CBCentral?
     var dataToSend = Data()
@@ -26,18 +28,18 @@ class PeripheralViewController: UIViewController {
     override func viewDidLoad() {
         peripheralManager = CBPeripheralManager(delegate: self, queue: nil, options: [CBPeripheralManagerOptionShowPowerAlertKey: true])
         super.viewDidLoad()
-
+        
     }
     
     override func viewWillDisappear(_ animated: Bool) {
         // Don't keep advertising going while we're not showing.
         peripheralManager.stopAdvertising()
-
+        
         super.viewWillDisappear(animated)
     }
     
     // MARK: - Switch Methods
-
+    
     @IBAction func switchChanged(_ sender: Any) {
         // All we advertise is our service's UUID.
         if advertisingSwitch.isOn {
@@ -46,20 +48,20 @@ class PeripheralViewController: UIViewController {
             peripheralManager.stopAdvertising()
         }
     }
-
+    
     // MARK: - Helper Methods
-
+    
     /*
      *  Sends the next amount of data to the connected central
      */
     static var sendingEOM = false
     
     private func sendData() {
-		
-		guard let transferCharacteristic = transferCharacteristic else {
-			return
-		}
-		
+        
+        guard let transferCharacteristic = transferCharacteristic else {
+            return
+        }
+        
         // First up, check if we're meant to be sending an EOM
         if PeripheralViewController.sendingEOM {
             // send it
@@ -116,7 +118,7 @@ class PeripheralViewController: UIViewController {
                 
                 //Send it
                 let eomSent = peripheralManager.updateValue("EOM".data(using: .utf8)!,
-                                                             for: transferCharacteristic, onSubscribedCentrals: nil)
+                                                            for: transferCharacteristic, onSubscribedCentrals: nil)
                 
                 if eomSent {
                     // It sent; we're all done
@@ -127,16 +129,16 @@ class PeripheralViewController: UIViewController {
             }
         }
     }
-
+    
     private func setupPeripheral() {
         
         // Build our service.
         
         // Start with the CBMutableCharacteristic.
         let transferCharacteristic = CBMutableCharacteristic(type: TransferService.characteristicUUID,
-                                                         properties: [.notify, .writeWithoutResponse],
-                                                         value: nil,
-                                                         permissions: [.readable, .writeable])
+                                                             properties: [.notify, .writeWithoutResponse],
+                                                             value: nil,
+                                                             permissions: [.readable, .writeable])
         
         // Create a service from the characteristic.
         let transferService = CBMutableService(type: TransferService.serviceUUID, primary: true)
@@ -149,13 +151,13 @@ class PeripheralViewController: UIViewController {
         
         // Save the characteristic for later.
         self.transferCharacteristic = transferCharacteristic
-
+        
     }
 }
 
 extension PeripheralViewController: CBPeripheralManagerDelegate {
     // implementations of the CBPeripheralManagerDelegate methods
-
+    
     /*
      *  Required protocol method.  A full app should take care of all the possible states,
      *  but we're just waiting for to know when the CBPeripheralManager is ready
@@ -210,7 +212,7 @@ extension PeripheralViewController: CBPeripheralManagerDelegate {
             return
         }
     }
-
+    
     /*
      *  Catch when someone subscribes to our characteristic, then start sending them data
      */
@@ -228,24 +230,27 @@ extension PeripheralViewController: CBPeripheralManagerDelegate {
         
         // Start sending
         //sendData()
-        sendPeripheralName()
+        if !peripheralNameSent {
+            sendPeripheralName()
+            peripheralNameSent = true
+        }
     }
     
     private func sendPeripheralName() {
-            guard let transferCharacteristic = transferCharacteristic,
-                  let connectedCentral = connectedCentral else {
-                return
-            }
-
-            let peripheralName = UIDevice.current.name
-            let peripheralNameData = peripheralName.data(using: .utf8)!
-
-            let didSend = peripheralManager.updateValue(peripheralNameData, for: transferCharacteristic, onSubscribedCentrals: [connectedCentral])
-            
-            if didSend {
-                os_log("Sent peripheral name to central: %@", peripheralName)
-            }
+        guard let transferCharacteristic = transferCharacteristic,
+              let connectedCentral = connectedCentral else {
+            return
         }
+        
+        let peripheralName = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
+        let peripheralNameData = peripheralName.data(using: .utf8)!
+        
+        let didSend = peripheralManager.updateValue(peripheralNameData, for: transferCharacteristic, onSubscribedCentrals: [connectedCentral])
+        
+        if didSend {
+            os_log("Sent peripheral name to central: %@", peripheralName)
+        }
+    }
     
     /*
      *  Recognize when the central unsubscribes
@@ -270,8 +275,8 @@ extension PeripheralViewController: CBPeripheralManagerDelegate {
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         for aRequest in requests {
             guard let requestValue = aRequest.value,
-                let stringFromData = String(data: requestValue, encoding: .utf8) else {
-                    continue
+                  let stringFromData = String(data: requestValue, encoding: .utf8) else {
+                continue
             }
             
             os_log("Received write request of %d bytes: %s", requestValue.count, stringFromData)
@@ -283,7 +288,7 @@ extension PeripheralViewController: CBPeripheralManagerDelegate {
 
 extension PeripheralViewController: UITextViewDelegate {
     // implementations of the UITextViewDelegate methods
-
+    
     /*
      *  This is called when a change happens, so we know to stop advertising
      */

@@ -4,7 +4,7 @@ Create a Bluetooth low energy central and peripheral device, and allow them to d
 
 ## Overview
 
-This sample shows how to transfer data between two iOS devices, with one acting as a Bluetooth central and the other as a peripheral, by using a [`CBCharacteristic`](https://developer.apple.com/documentation/corebluetooth/cbcharacteristic) on the peripheral side that changes its value. The value change is automatically picked up on the central side. The sample also shows how the central side can write data to a [`CBCharacteristic`](https://developer.apple.com/documentation/corebluetooth/cbcharacteristic) on the peripheral side. 
+This sample shows how to transfer data between one iOS device to multiple iOS devices, with one acting as a Bluetooth central and the others as a peripherals, by using a [`CBCharacteristic`](https://developer.apple.com/documentation/corebluetooth/cbcharacteristic) on the peripheral side that changes its value. The value change is automatically picked up on both sides. The sample also shows how the central side can write data to a [`CBCharacteristic`](https://developer.apple.com/documentation/corebluetooth/cbcharacteristic) on the peripheral side.
 
 This sample shows how to handle flow control in this scenario. It also covers a rudimentary way to use the Received Signal Strength Indicator (RSSI) value to determine whether data transfer is feasible.
 

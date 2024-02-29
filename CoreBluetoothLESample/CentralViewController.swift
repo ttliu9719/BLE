@@ -9,28 +9,24 @@ import UIKit
 import CoreBluetooth
 import os
 
-class CentralViewController: UIViewController {
+class CentralViewController: UITableViewController {
     // UIViewController overrides, properties specific to this class, private helper methods, etc.
-    
-    @IBOutlet var textView: UITextView!
-    
+        
     var centralManager: CBCentralManager!
     
-    var discoveredPeripheral: CBPeripheral?
+    var discoveredPeripherals: [UUID: CBPeripheral] = [:]
+
+    var receivedPeripheralMessages: [UUID: String] = [:]
+
     var transferCharacteristic: CBCharacteristic?
-    var writeIterationsComplete = 0
-    var connectionIterationsComplete = 0
-    
-    let defaultIterations = 5     // change this value based on test usecase
-    
-    var data = Data()
+    private let bluetoothQueue = DispatchQueue(label: "com.yourapp.bluetoothQueue")
+
     var peripheralName: String?
     // MARK: - view lifecycle
     
     override func viewDidLoad() {
         centralManager = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: true])
         super.viewDidLoad()
-        
     }
     
     override func viewWillDisappear(_ animated: Bool) {
@@ -38,9 +34,33 @@ class CentralViewController: UIViewController {
         centralManager.stopScan()
         os_log("Scanning stopped")
         
-        data.removeAll(keepingCapacity: false)
-        
         super.viewWillDisappear(animated)
+    }
+    
+    override func numberOfSections(in tableView: UITableView) -> Int {
+        return 1
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return discoveredPeripherals.count
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "PeripheralCell", for: indexPath)
+        
+        // Fetch the peripheral and message for the current indexPath
+        let peripheral = Array(discoveredPeripherals.values)[indexPath.row]
+        let message = receivedPeripheralMessages[peripheral.identifier]
+        
+        // Configure the cell with the peripheral name and received message
+        cell.textLabel?.text = message
+        // You might want to customize the cell further based on your needs
+        
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        presentPeripheralNameAlert(for: Array(discoveredPeripherals.values)[indexPath.row])
     }
     
     // MARK: - Helper Methods
@@ -50,19 +70,28 @@ class CentralViewController: UIViewController {
      * Otherwise, scan for peripherals - specifically for our service's 128bit CBUUID
      */
     private func retrievePeripheral() {
-        
-        let connectedPeripherals: [CBPeripheral] = (centralManager.retrieveConnectedPeripherals(withServices: [TransferService.serviceUUID]))
-        
-        os_log("Found connected Peripherals with transfer service: %@", connectedPeripherals)
-        
-        if let connectedPeripheral = connectedPeripherals.last {
-            os_log("Connecting to peripheral %@", connectedPeripheral)
-            self.discoveredPeripheral = connectedPeripheral
-            centralManager.connect(connectedPeripheral, options: nil)
-        } else {
-            // We were not connected to our counterpart, so start scanning
-            centralManager.scanForPeripherals(withServices: [TransferService.serviceUUID],
-                                              options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        bluetoothQueue.async { [weak self] in
+            guard let self = self else { return }
+            // Retrieve a list of all connected peripherals with the transfer service
+            let connectedPeripherals: [CBPeripheral] = self.centralManager.retrieveConnectedPeripherals(withServices: [TransferService.serviceUUID])
+            
+            if !connectedPeripherals.isEmpty {
+                os_log("Found connected peripherals with transfer service: %@", connectedPeripherals)
+                
+                // Connect to each connected peripheral
+                for connectedPeripheral in connectedPeripherals {
+                    if discoveredPeripherals[connectedPeripheral.identifier] == nil {
+                        os_log("Connecting to peripheral %@", connectedPeripheral)
+                        self.centralManager.connect(connectedPeripheral, options: nil)
+                    }
+                }
+            } else {
+                os_log("No connected peripherals with transfer service found. Starting scanning.")
+                
+                // If there are no connected peripherals, start scanning for new ones
+                self.centralManager.scanForPeripherals(withServices: [TransferService.serviceUUID],
+                                                       options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+            }
         }
     }
     
@@ -71,84 +100,56 @@ class CentralViewController: UIViewController {
      *  This cancels any subscriptions if there are any, or straight disconnects if not.
      *  (didUpdateNotificationStateForCharacteristic will cancel the connection if a subscription is involved)
      */
+    
     private func cleanup() {
-        // Don't do anything if we're not connected
-        guard let discoveredPeripheral = discoveredPeripheral,
-              case .connected = discoveredPeripheral.state else { return }
-        
-        for service in (discoveredPeripheral.services ?? [] as [CBService]) {
-            for characteristic in (service.characteristics ?? [] as [CBCharacteristic]) {
-                if characteristic.uuid == TransferService.characteristicUUID && characteristic.isNotifying {
-                    // It is notifying, so unsubscribe
-                    self.discoveredPeripheral?.setNotifyValue(false, for: characteristic)
+        bluetoothQueue.async { [weak self] in
+            guard let self = self else { return }
+            os_log("Cleaning up")
+            // Loop through connected peripherals and clean up each one
+            for (_, peripheral) in discoveredPeripherals {
+                guard transferCharacteristic != nil else { continue }
+                
+                for service in (peripheral.services ?? [] as [CBService]) {
+                    for characteristic in (service.characteristics ?? [] as [CBCharacteristic]) {
+                        if characteristic.uuid == TransferService.characteristicUUID && characteristic.isNotifying {
+                            // It is notifying, so unsubscribe
+                            peripheral.setNotifyValue(false, for: characteristic)
+                        }
+                    }
                 }
+                
+                // If we've gotten this far, we're connected, but we're not subscribed, so we just disconnect
+                self.centralManager.cancelPeripheralConnection(peripheral)
             }
+            
+            // Clear the connected peripherals dictionary
+            self.discoveredPeripherals.removeAll()
         }
-        
-        // If we've gotten this far, we're connected, but we're not subscribed, so we just disconnect
-        centralManager.cancelPeripheralConnection(discoveredPeripheral)
     }
     
-    func presentPeripheralNameAlert(name: String) {
+    func presentPeripheralNameAlert(for peripheral: CBPeripheral) {
         let alertController = UIAlertController(
             title: "Peripheral Connected, Do you want to send message to Central?",
-            message: "Peripheral Name: \(name)",
+            message: "Peripheral Name: \(String(describing: peripheral.name))",
             preferredStyle: .alert
         )
         
         let okAction = UIAlertAction(title: "OK", style: .default) { [weak self] _ in
             // After dismissing the alert, send "text" to the peripheral
-            self?.sendTextToPeripheral()
+            self?.sendText(to: peripheral)
         }
         
         alertController.addAction(okAction)
         present(alertController, animated: true, completion: nil)
     }
     
-    private func sendTextToPeripheral() {
-        guard let discoveredPeripheral = discoveredPeripheral,
-              let transferCharacteristic = transferCharacteristic
-        else { return }
+    private func sendText(to peripheral: CBPeripheral) {
+        guard let transferCharacteristic = transferCharacteristic else { return }
         
         // Send "text" to the peripheral
         let textData = "Hello from Central!".data(using: .utf8)!
-        discoveredPeripheral.writeValue(textData, for: transferCharacteristic, type: .withoutResponse)
+        peripheral.writeValue(textData, for: transferCharacteristic, type: .withoutResponse)
     }
-    
-    /*
-     *  Write some test data to peripheral
-     */
-    private func writeData() {
-        
-        guard let discoveredPeripheral = discoveredPeripheral,
-              let transferCharacteristic = transferCharacteristic
-        else { return }
-        
-        // check to see if number of iterations completed and peripheral can accept more data
-        //        while writeIterationsComplete < defaultIterations && discoveredPeripheral.canSendWriteWithoutResponse {
-        //
-        //            let mtu = discoveredPeripheral.maximumWriteValueLength (for: .withoutResponse)
-        //            var rawPacket = [UInt8]()
-        //
-        //            let bytesToCopy: size_t = min(mtu, data.count)
-        //			data.copyBytes(to: &rawPacket, count: bytesToCopy)
-        //            let packetData = Data(bytes: &rawPacket, count: bytesToCopy)
-        //
-        //			let stringFromData = String(data: packetData, encoding: .utf8)
-        //			os_log("Writing %d bytes: %s", bytesToCopy, String(describing: stringFromData))
-        //
-        //            discoveredPeripheral.writeValue(packetData, for: transferCharacteristic, type: .withoutResponse)
-        //
-        //            writeIterationsComplete += 1
-        //
-        //        }
-        discoveredPeripheral.writeValue(data, for: transferCharacteristic, type: .withoutResponse)
-        if writeIterationsComplete == defaultIterations {
-            // Cancel our subscription to the characteristic
-            discoveredPeripheral.setNotifyValue(false, for: transferCharacteristic)
-        }
-    }
-    
 }
 
 extension CentralViewController: CBCentralManagerDelegate {
@@ -224,12 +225,12 @@ extension CentralViewController: CBCentralManagerDelegate {
         os_log("Discovered %s at %d", String(describing: peripheral.name), RSSI.intValue)
         
         // Device is in range - have we already seen it?
-        if discoveredPeripheral != peripheral {
+        if discoveredPeripherals[peripheral.identifier] == nil {
             
             // Save a local copy of the peripheral, so CoreBluetooth doesn't get rid of it.
-            discoveredPeripheral = peripheral
+            discoveredPeripherals[peripheral.identifier] = peripheral
             // And finally, connect to the peripheral.
-            os_log("Connecting to perhiperal %@", peripheral)
+            os_log("Connecting to peripheral %@", peripheral)
             centralManager.connect(peripheral, options: nil)
         }
     }
@@ -253,24 +254,14 @@ extension CentralViewController: CBCentralManagerDelegate {
      */
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         os_log("Peripheral Connected")
+        
         provideHapticFeedback()
-
-        // Stop scanning
-        centralManager.stopScan()
-        os_log("Scanning stopped")
         
-        // set iteration info
-        connectionIterationsComplete += 1
-        writeIterationsComplete = 0
-        
-        // Clear the data that we may already have
-        data.removeAll(keepingCapacity: false)
-        
-        peripheralName = peripheral.name
-        
-        // Present an alert with the peripheral name
-        if let name = peripheralName {
-            presentPeripheralNameAlert(name: name)
+        if discoveredPeripherals[peripheral.identifier] == nil {
+            DispatchQueue.main.async {
+                self.discoveredPeripherals[peripheral.identifier] = peripheral
+                self.tableView.reloadData()
+            }
         }
         
         // Make sure we get the discovery callbacks
@@ -278,23 +269,27 @@ extension CentralViewController: CBCentralManagerDelegate {
         
         // Search only for services that match our UUID
         peripheral.discoverServices([TransferService.serviceUUID])
+        
+        // Continue scanning for other peripherals
+        retrievePeripheral()
     }
     
     /*
      *  Once the disconnection happens, we need to clean up our local copy of the peripheral
      */
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        os_log("Perhiperal Disconnected")
-        discoveredPeripheral = nil
+        os_log("Peripheral Disconnected: %@", peripheral.identifier.uuidString)
+        
+        DispatchQueue.main.async {
+            self.discoveredPeripherals.removeValue(forKey: peripheral.identifier)
+            self.receivedPeripheralMessages.removeValue(forKey: peripheral.identifier)
+            self.tableView.reloadData()
+        }
         
         // We're disconnected, so start scanning again
-        if connectionIterationsComplete < defaultIterations {
-            retrievePeripheral()
-        } else {
-            os_log("Connection iterations completed")
-        }
+        // todo: update the logic maybe with timer to disconnect, add some delay
+        retrievePeripheral()
     }
-    
 }
 
 extension CentralViewController: CBPeripheralDelegate {
@@ -365,17 +360,18 @@ extension CentralViewController: CBPeripheralDelegate {
         }
         
         guard let characteristicData = characteristic.value,
-              let stringFromData = String(data: characteristicData, encoding: .utf8) else { return }
+              let stringFromData = String(data: characteristicData, encoding: .utf8),
+              let transferCharacteristic = transferCharacteristic else { return }
         
         os_log("Received %d bytes: %s", characteristicData.count, stringFromData)
-
-        DispatchQueue.main.async() {
-            self.textView.text = String(data: self.data, encoding: .utf8)
+        DispatchQueue.main.async {
+            // Update receivedPeripheralMessages with the latest data
+            self.receivedPeripheralMessages[peripheral.identifier] = stringFromData
+            
+            // Reload the table view to reflect the changes
+            self.tableView.reloadData()
         }
-        
-        // Write test data
-        writeData()
-        os_log("peripheral name: %s, id: %s", peripheral.name ?? "", peripheral.identifier.uuidString)
+        peripheral.setNotifyValue(true, for: transferCharacteristic)
     }
     
     /*
@@ -407,8 +403,6 @@ extension CentralViewController: CBPeripheralDelegate {
      */
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         os_log("Peripheral is ready, send data")
-        //writeData()
-        
     }
     
 }
